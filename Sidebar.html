@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600;700&display=swap" rel="stylesheet">
+    <style>
+      :root {
+        --bg: #f8f9fa;
+        --panel: #ffffff;
+        --border: #dadce0;
+        --text: #202124;
+        --muted: #5f6368;
+        --primary: #1a73e8;
+        --primary-hover: #1765cc;
+        --chip: #e8f0fe;
+        --shadow: 0 1px 2px rgba(60, 64, 67, 0.15), 0 1px 3px 1px rgba(60, 64, 67, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 16px;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px/1.45 "Google Sans", Roboto, Arial, sans-serif;
+      }
+
+      .shell {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .header {
+        padding: 16px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .title {
+        margin: 0 0 6px;
+        font-size: 16px;
+        font-weight: 600;
+      }
+
+      .subtitle,
+      .meta,
+      .hint,
+      .status {
+        color: var(--muted);
+      }
+
+      .subtitle,
+      .meta,
+      .hint,
+      .status,
+      .label {
+        font-size: 12px;
+      }
+
+      .content {
+        padding: 16px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: var(--chip);
+        color: var(--primary);
+        font-weight: 600;
+      }
+
+      .tabs {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 14px;
+      }
+
+      .tab {
+        flex: 1;
+        border: 1px solid var(--border);
+        background: #fff;
+        color: var(--text);
+        border-radius: 999px;
+        padding: 10px 12px;
+        cursor: pointer;
+        font-weight: 600;
+      }
+
+      .tab.active {
+        background: var(--primary);
+        border-color: var(--primary);
+        color: #fff;
+      }
+
+      .panel {
+        display: none;
+      }
+
+      .panel.active {
+        display: block;
+      }
+
+      .canvas-wrap {
+        border: 1px dashed var(--border);
+        border-radius: 14px;
+        background: #fff;
+        overflow: hidden;
+      }
+
+      canvas {
+        display: block;
+        width: 100%;
+        background: #fff;
+        touch-action: none;
+      }
+
+      .actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .btn {
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 10px 14px;
+        background: #fff;
+        color: var(--text);
+        cursor: pointer;
+        font-weight: 600;
+      }
+
+      .btn.primary {
+        border-color: var(--primary);
+        background: var(--primary);
+        color: #fff;
+      }
+
+      .btn.primary:hover {
+        background: var(--primary-hover);
+      }
+
+      .btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .input {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 12px 14px;
+        font: inherit;
+      }
+
+      .preview {
+        min-height: 110px;
+        margin-top: 10px;
+        padding: 18px;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: linear-gradient(180deg, #ffffff 0%, #fdfefe 100%);
+      }
+
+      .signature-preview {
+        font-family: "Dancing Script", cursive;
+        font-size: 38px;
+        line-height: 1.2;
+        color: #1f1f1f;
+        word-break: break-word;
+      }
+
+      .state {
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid var(--border);
+        background: #fff;
+      }
+
+      .state.blocked {
+        border-color: #f6c7c7;
+        background: #fce8e6;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <div class="card">
+        <div class="header">
+          <div class="pill">Sequential workflow</div>
+          <h1 class="title">Approval signature</h1>
+          <div class="subtitle" id="docName"></div>
+        </div>
+        <div class="content">
+          <div class="state" id="stateBox">
+            <div class="meta" id="stateMeta"></div>
+            <div class="status" id="stateStatus"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" id="signCard">
+        <div class="content">
+          <div class="tabs">
+            <button class="tab active" data-tab="draw">Draw</button>
+            <button class="tab" data-tab="type">Type</button>
+          </div>
+
+          <div class="panel active" data-panel="draw">
+            <div class="hint">Sign with your mouse or finger inside the box.</div>
+            <div class="canvas-wrap" style="margin-top:10px;">
+              <canvas id="signatureCanvas" width="320" height="180"></canvas>
+            </div>
+            <div class="actions">
+              <button class="btn" id="clearCanvasBtn" type="button">Clear</button>
+            </div>
+          </div>
+
+          <div class="panel" data-panel="type">
+            <div class="field">
+              <label class="label" for="typedSignature">Name for signature</label>
+              <input class="input" id="typedSignature" type="text" maxlength="80" placeholder="Type your name">
+            </div>
+            <div class="preview">
+              <div class="signature-preview" id="typedPreview">Your signature will appear here</div>
+            </div>
+            <div class="hint" style="margin-top:10px;">The preview uses Dancing Script to simulate a handwritten signature.</div>
+          </div>
+
+          <div class="actions" style="margin-top:16px;">
+            <button class="btn primary" id="confirmBtn" type="button">Confirm signature</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <canvas id="hiddenTextCanvas" class="hidden" width="600" height="220"></canvas>
+    <canvas id="exportCanvas" class="hidden" width="360" height="160"></canvas>
+
+    <script>
+      const initialContext = <?!= JSON.stringify(context) ?>;
+      let activeTab = 'draw';
+      let drawing = false;
+      let hasDrawn = false;
+
+      const tabs = Array.from(document.querySelectorAll('.tab'));
+      const panels = Array.from(document.querySelectorAll('.panel'));
+      const canvas = document.getElementById('signatureCanvas');
+      const ctx = canvas.getContext('2d');
+      const hiddenTextCanvas = document.getElementById('hiddenTextCanvas');
+      const hiddenTextCtx = hiddenTextCanvas.getContext('2d');
+      const exportCanvas = document.getElementById('exportCanvas');
+      const exportCtx = exportCanvas.getContext('2d');
+      const EXPORT_ZOOM_FACTOR = 2;
+      const typedInput = document.getElementById('typedSignature');
+      const typedPreview = document.getElementById('typedPreview');
+      const confirmBtn = document.getElementById('confirmBtn');
+      const clearCanvasBtn = document.getElementById('clearCanvasBtn');
+
+      init();
+
+      function init() {
+        renderContext(initialContext);
+        setupTabs();
+        setupCanvas();
+        setupTypedPreview();
+        clearCanvas();
+      }
+
+      function renderContext(context) {
+        document.getElementById('docName').textContent = context.documentName || '';
+
+        const current = context.currentApprover;
+        const stateMeta = context.initialized
+          ? `Step ${Math.min(context.currentStep + 1, context.totalSteps)} of ${context.totalSteps}`
+          : 'Workflow not initialized';
+
+        let stateStatus = 'No active approver.';
+        if (current) {
+          stateStatus = `Current approver: ${current.name} (${current.email})`;
+        }
+
+        document.getElementById('stateMeta').textContent = stateMeta;
+        document.getElementById('stateStatus').textContent = stateStatus;
+
+        const stateBox = document.getElementById('stateBox');
+        const signCard = document.getElementById('signCard');
+        if (!context.canSign) {
+          stateBox.classList.add('blocked');
+          signCard.classList.add('hidden');
+          return;
+        }
+
+        stateBox.classList.remove('blocked');
+        signCard.classList.remove('hidden');
+      }
+
+      function setupTabs() {
+        tabs.forEach((tab) => {
+          tab.addEventListener('click', () => {
+            activeTab = tab.dataset.tab;
+            tabs.forEach((item) => item.classList.toggle('active', item === tab));
+            panels.forEach((panel) => panel.classList.toggle('active', panel.dataset.panel === activeTab));
+          });
+        });
+      }
+
+      function setupCanvas() {
+        const start = (event) => {
+          drawing = true;
+          hasDrawn = true;
+          const point = getPoint(event);
+          ctx.beginPath();
+          ctx.moveTo(point.x, point.y);
+          event.preventDefault();
+        };
+
+        const move = (event) => {
+          if (!drawing) return;
+          const point = getPoint(event);
+          ctx.lineTo(point.x, point.y);
+          ctx.stroke();
+          event.preventDefault();
+        };
+
+        const end = () => {
+          drawing = false;
+          ctx.closePath();
+        };
+
+        ctx.lineWidth = 2.4;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = '#202124';
+
+        canvas.addEventListener('mousedown', start);
+        canvas.addEventListener('mousemove', move);
+        canvas.addEventListener('mouseup', end);
+        canvas.addEventListener('mouseleave', end);
+        canvas.addEventListener('touchstart', start, { passive: false });
+        canvas.addEventListener('touchmove', move, { passive: false });
+        canvas.addEventListener('touchend', end);
+
+        clearCanvasBtn.addEventListener('click', clearCanvas);
+      }
+
+      function clearCanvas() {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        hasDrawn = false;
+      }
+
+      function getPoint(event) {
+        const rect = canvas.getBoundingClientRect();
+        const source = event.touches && event.touches[0] ? event.touches[0] : event;
+        return {
+          x: ((source.clientX - rect.left) / rect.width) * canvas.width,
+          y: ((source.clientY - rect.top) / rect.height) * canvas.height
+        };
+      }
+
+      function setupTypedPreview() {
+        typedInput.addEventListener('input', () => {
+          const value = typedInput.value.trim();
+          typedPreview.textContent = value || 'Your signature will appear here';
+        });
+      }
+
+      confirmBtn.addEventListener('click', async () => {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Saving...';
+
+        try {
+          await document.fonts.ready;
+          const payload = activeTab === 'draw' ? buildDrawPayload() : buildTypedPayload();
+          const result = await runServer('confirmSignature', payload);
+          alert(result.message);
+          google.script.host.close();
+        } catch (error) {
+          alert(error.message || error);
+        } finally {
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = 'Confirm signature';
+        }
+      });
+
+      function buildDrawPayload() {
+        if (!hasDrawn) {
+          throw new Error('Draw your signature before confirming.');
+        }
+
+        return {
+          mode: 'draw',
+          imageBase64: normalizeSignatureCanvas(canvas).split(',')[1]
+        };
+      }
+
+      function buildTypedPayload() {
+        const value = typedInput.value.trim();
+        if (!value) {
+          throw new Error('Type your name to generate the signature.');
+        }
+
+        hiddenTextCtx.clearRect(0, 0, hiddenTextCanvas.width, hiddenTextCanvas.height);
+        hiddenTextCtx.fillStyle = '#ffffff';
+        hiddenTextCtx.fillRect(0, 0, hiddenTextCanvas.width, hiddenTextCanvas.height);
+        hiddenTextCtx.fillStyle = '#202124';
+        hiddenTextCtx.textAlign = 'center';
+        hiddenTextCtx.textBaseline = 'middle';
+        hiddenTextCtx.font = '700 74px "Dancing Script"';
+        hiddenTextCtx.fillText(value, hiddenTextCanvas.width / 2, hiddenTextCanvas.height / 2);
+
+        return {
+          mode: 'type',
+          imageBase64: normalizeSignatureCanvas(hiddenTextCanvas).split(',')[1]
+        };
+      }
+
+      function normalizeSignatureCanvas(sourceCanvas) {
+        const targetWidth = exportCanvas.width;
+        const targetHeight = exportCanvas.height;
+        const paddingX = 18;
+        const paddingY = 16;
+        const availableWidth = targetWidth - paddingX * 2;
+        const availableHeight = targetHeight - paddingY * 2;
+        const scale = Math.min(
+          availableWidth / sourceCanvas.width,
+          availableHeight / sourceCanvas.height
+        );
+
+        const drawWidth = sourceCanvas.width * scale * EXPORT_ZOOM_FACTOR;
+        const drawHeight = sourceCanvas.height * scale * EXPORT_ZOOM_FACTOR;
+        const dx = (targetWidth - drawWidth) / 2;
+        const dy = (targetHeight - drawHeight) / 2;
+
+        exportCtx.clearRect(0, 0, targetWidth, targetHeight);
+        exportCtx.fillStyle = '#ffffff';
+        exportCtx.fillRect(0, 0, targetWidth, targetHeight);
+        exportCtx.drawImage(sourceCanvas, dx, dy, drawWidth, drawHeight);
+
+        return exportCanvas.toDataURL('image/png');
+      }
+
+      function runServer(method, payload) {
+        return new Promise((resolve, reject) => {
+          google.script.run
+            .withSuccessHandler(resolve)
+            .withFailureHandler(reject)[method](payload);
+        });
+      }
+    </script>
+  </body>
+</html>

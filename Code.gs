@@ -1,0 +1,655 @@
+const STEP_KEY = 'paso_actual';
+const EMAIL_LIST_KEY = 'lista_correos';
+const DOCUMENT_ID_KEY = 'document_id';
+const APPROVERS_KEY = 'approval_approvers_v1';
+const UPDATED_AT_KEY = 'approval_updated_at_v1';
+const LAST_SIGNED_BY_KEY = 'approval_last_signed_by_v1';
+const SIGNATURE_IMAGE_WIDTH = 112;
+const PDF_FOLDER_NAME = 'Approved PDFs';
+const SIGNED_NOTE_PREFIX = 'Signed on ';
+
+function onOpen() {
+  const ui = DocumentApp.getUi();
+  ui.createMenu('Approvals')
+    .addItem('Open Signature Panel', 'showSignatureSidebar')
+    .addItem('Initialize Workflow', 'initializeApprovalFlow')
+    .addItem('Diagnose Links', 'debugApprovalLinks')
+    .addItem('Reset Workflow', 'resetApprovalFlow')
+    .addToUi();
+
+  try {
+    const context = getApprovalContext_();
+    if (context.canSign) {
+      showSignatureSidebar();
+    }
+  } catch (error) {
+    console.error('onOpen error:', error);
+  }
+}
+
+function showSignatureSidebar() {
+  const template = HtmlService.createTemplateFromFile('Sidebar');
+  template.context = getApprovalContext_();
+  const html = template.evaluate()
+    .setTitle('Approval Signature')
+    .setWidth(360);
+  DocumentApp.getUi().showSidebar(html);
+}
+
+function initializeApprovalFlow() {
+  const state = buildApprovalState_();
+  saveApprovalState_(state);
+
+  const currentApprover = state.approvers[state.currentStep] || null;
+  const message = currentApprover
+    ? 'Workflow initialized. Current approver: ' + currentApprover.name + ' (' + currentApprover.email + ').'
+    : buildNoApproverMessage_();
+
+  DocumentApp.getUi().alert(message);
+}
+
+function resetApprovalFlow() {
+  clearAllApprovalMarks_();
+  const props = PropertiesService.getDocumentProperties();
+  [
+    STEP_KEY,
+    EMAIL_LIST_KEY,
+    DOCUMENT_ID_KEY,
+    APPROVERS_KEY,
+    UPDATED_AT_KEY,
+    LAST_SIGNED_BY_KEY
+  ].forEach(function(key) {
+    props.deleteProperty(key);
+  });
+  DocumentApp.getUi().alert('Workflow state reset.');
+}
+
+function getSidebarData() {
+  return getApprovalContext_();
+}
+
+function confirmSignature(payload) {
+  if (!payload || !payload.imageBase64) {
+    throw new Error('No signature was received.');
+  }
+
+  const state = getApprovalState_();
+  const approver = state.approvers[state.currentStep];
+  if (!approver) {
+    throw new Error('The workflow is already complete or has not been initialized.');
+  }
+
+  const activeEmail = getActiveUserEmail_();
+  if (!activeEmail) {
+    throw new Error('Could not identify the active user email.');
+  }
+  if (normalizeEmail_(activeEmail) !== normalizeEmail_(approver.email)) {
+    throw new Error('Only the current approver can sign this document.');
+  }
+
+  const documentId = state.documentId || DocumentApp.getActiveDocument().getId();
+  if (documentId !== DocumentApp.getActiveDocument().getId()) {
+    throw new Error('The saved workflow state belongs to another document.');
+  }
+
+  insertSignatureIntoTable_(payload.imageBase64, approver, payload.mode);
+
+  state.currentStep += 1;
+  state.updatedAt = new Date().toISOString();
+  state.lastSignedBy = approver.email;
+
+  if (state.currentStep < state.approvers.length) {
+    saveApprovalState_(state);
+    sendNextApproverEmail_(state);
+    return {
+      done: false,
+      message: 'Signature recorded. ' + state.approvers[state.currentStep].name + ' has been notified.'
+    };
+  }
+
+  saveApprovalState_(state);
+  const pdfFile = finalizeAndExportApprovedPdf_();
+  notifyAllApproved_(state, pdfFile);
+  return {
+    done: true,
+    message: 'Signature recorded. The document is now fully approved.'
+  };
+}
+
+function include(filename) {
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+function getApprovalContext_() {
+  const state = getApprovalState_();
+  const activeEmail = getActiveUserEmail_();
+  const currentApprover = state.approvers[state.currentStep] || null;
+  const canSign = Boolean(
+    currentApprover &&
+    activeEmail &&
+    normalizeEmail_(activeEmail) === normalizeEmail_(currentApprover.email)
+  );
+
+  return {
+    initialized: state.approvers.length > 0,
+    currentStep: state.currentStep,
+    totalSteps: state.approvers.length,
+    activeUserEmail: activeEmail,
+    currentApprover: currentApprover,
+    canSign: canSign,
+    documentName: DocumentApp.getActiveDocument().getName(),
+    approvers: state.approvers
+  };
+}
+
+function getApprovalState_() {
+  const props = PropertiesService.getDocumentProperties();
+  const approversRaw = props.getProperty(APPROVERS_KEY);
+  if (approversRaw) {
+    const approvers = JSON.parse(approversRaw) || [];
+    const state = {
+      currentStep: Number(props.getProperty(STEP_KEY) || 0),
+      approvers: approvers,
+      emailList: JSON.parse(props.getProperty(EMAIL_LIST_KEY) || '[]'),
+      documentId: props.getProperty(DOCUMENT_ID_KEY) || DocumentApp.getActiveDocument().getId(),
+      updatedAt: props.getProperty(UPDATED_AT_KEY) || '',
+      lastSignedBy: props.getProperty(LAST_SIGNED_BY_KEY) || ''
+    };
+    if (!state.emailList.length) {
+      state.emailList = approvers.map(function(approver) {
+        return approver.email;
+      });
+    }
+    return state;
+  }
+
+  const state = buildApprovalState_();
+  saveApprovalState_(state);
+  return state;
+}
+
+function buildApprovalState_() {
+  const doc = DocumentApp.getActiveDocument();
+  const body = getDocumentBody_(doc);
+  const approvers = extractApproversFromTables_(body);
+
+  return {
+    currentStep: 0,
+    approvers: approvers,
+    emailList: approvers.map(function(approver) {
+      return approver.email;
+    }),
+    documentId: doc.getId(),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function saveApprovalState_(state) {
+  const props = PropertiesService.getDocumentProperties();
+  props.setProperty(STEP_KEY, String(state.currentStep || 0));
+  props.setProperty(EMAIL_LIST_KEY, JSON.stringify(state.emailList || []));
+  props.setProperty(DOCUMENT_ID_KEY, state.documentId || DocumentApp.getActiveDocument().getId());
+  props.setProperty(APPROVERS_KEY, JSON.stringify(state.approvers || []));
+  props.setProperty(UPDATED_AT_KEY, state.updatedAt || new Date().toISOString());
+  if (state.lastSignedBy) {
+    props.setProperty(LAST_SIGNED_BY_KEY, state.lastSignedBy);
+  }
+}
+
+function extractApproversFromTables_(body) {
+  const approvers = [];
+  const seenEmails = {};
+  const tableCount = body.getNumChildren();
+
+  for (let childIndex = 0; childIndex < tableCount; childIndex += 1) {
+    const child = body.getChild(childIndex);
+    if (child.getType() !== DocumentApp.ElementType.TABLE) {
+      continue;
+    }
+
+    const table = child.asTable();
+    for (let rowIndex = 0; rowIndex < table.getNumRows(); rowIndex += 1) {
+      const row = table.getRow(rowIndex);
+      for (let cellIndex = 0; cellIndex < row.getNumCells(); cellIndex += 1) {
+        const cell = row.getCell(cellIndex);
+        const links = getCellMailtoLinks_(cell);
+        links.forEach(function(link) {
+          const normalizedEmail = normalizeEmail_(link.email);
+          if (!normalizedEmail || seenEmails[normalizedEmail]) {
+            return;
+          }
+
+          seenEmails[normalizedEmail] = true;
+          approvers.push({
+            name: link.text || normalizedEmail,
+            email: normalizedEmail,
+            tableIndex: childIndex,
+            rowIndex: rowIndex,
+            nameCellIndex: cellIndex,
+            signatureRowIndex: resolveSignatureRowIndex_(table, rowIndex, cellIndex),
+            signatureCellIndex: cellIndex,
+            noteRowIndex: resolveNoteRowIndex_(table, rowIndex, cellIndex),
+            noteCellIndex: cellIndex
+          });
+        });
+      }
+    }
+  }
+
+  return approvers.slice(0, 4);
+}
+
+function buildNoApproverMessage_() {
+  const diagnostics = inspectDocumentLinks_();
+  return [
+    'No approvers with mailto links or person chips were found inside tables.',
+    'Tables scanned: ' + diagnostics.tableCount + '.',
+    'Detected approver links across the document: ' + diagnostics.mailtoCount + '.',
+    diagnostics.samples.length
+      ? 'Samples: ' + diagnostics.samples.join(' | ')
+      : 'Apps Script could not read any mailto links or person chips.',
+    'Make sure each approver is inserted as a real person chip or a mailto hyperlink, not plain text or an embedded visual element.'
+  ].join('\n');
+}
+
+function debugApprovalLinks() {
+  const diagnostics = inspectDocumentLinks_();
+  const lines = [
+    'Tables scanned: ' + diagnostics.tableCount,
+    'Detected approver links in the document: ' + diagnostics.mailtoCount
+  ];
+
+  if (diagnostics.samples.length) {
+    lines.push('Samples:');
+    diagnostics.samples.forEach(function(sample) {
+      lines.push('- ' + sample);
+    });
+  } else {
+    lines.push('Apps Script could not read any mailto links or person chips.');
+  }
+
+  DocumentApp.getUi().alert(lines.join('\n'));
+}
+
+function getCellMailtoLinks_(cell) {
+  const links = [];
+  collectMailtoLinksFromElement_(cell, links);
+  return links;
+}
+
+function collectMailtoLinksFromElement_(element, links) {
+  const type = element.getType();
+  if (type === DocumentApp.ElementType.PERSON) {
+    const person = element.asPerson();
+    const email = normalizeEmail_(person.getEmail());
+    if (email) {
+      links.push({
+        email: email,
+        text: person.getName() || email
+      });
+    }
+    return;
+  }
+
+  if (type === DocumentApp.ElementType.TEXT) {
+    collectMailtoLinksFromText_(element.asText(), links);
+    return;
+  }
+
+  if (typeof element.getNumChildren !== 'function') {
+    return;
+  }
+
+  for (let i = 0; i < element.getNumChildren(); i += 1) {
+    collectMailtoLinksFromElement_(element.getChild(i), links);
+  }
+}
+
+function collectMailtoLinksFromText_(text, links) {
+  const textContent = text.getText();
+  if (!textContent) {
+    return;
+  }
+
+  const indices = text.getTextAttributeIndices();
+  if (!indices.length || indices[0] !== 0) {
+    indices.unshift(0);
+  }
+
+  for (let i = 0; i < indices.length; i += 1) {
+    const start = indices[i];
+    const end = i + 1 < indices.length ? indices[i + 1] - 1 : textContent.length - 1;
+    const url = text.getLinkUrl(start);
+    if (!url || !/^mailto:/i.test(url)) {
+      continue;
+    }
+
+    const segmentText = textContent.substring(start, end + 1).trim();
+    const email = url.replace(/^mailto:/i, '').split('?')[0].trim();
+    if (!email) {
+      continue;
+    }
+
+    links.push({
+      email: email,
+      text: segmentText
+    });
+  }
+}
+
+function resolveSignatureRowIndex_(table, nameRowIndex, cellIndex) {
+  if (nameRowIndex > 0) {
+    const candidateCell = table.getRow(nameRowIndex - 1).getCell(cellIndex);
+    if (isCellMostlyEmpty_(candidateCell)) {
+      return nameRowIndex - 1;
+    }
+  }
+  return nameRowIndex;
+}
+
+function resolveNoteRowIndex_(table, nameRowIndex, cellIndex) {
+  for (let offset = 0; offset <= 2; offset += 1) {
+    const candidateRowIndex = nameRowIndex + offset;
+    if (candidateRowIndex >= table.getNumRows()) {
+      break;
+    }
+
+    const candidateCell = table.getRow(candidateRowIndex).getCell(cellIndex);
+    if (/date\s*:/i.test(candidateCell.getText())) {
+      return candidateRowIndex;
+    }
+  }
+
+  return nameRowIndex;
+}
+
+function insertSignatureIntoTable_(imageBase64, approver, mode) {
+  const doc = DocumentApp.getActiveDocument();
+  const body = getDocumentBody_(doc);
+  const table = body.getChild(approver.tableIndex).asTable();
+  const signatureRow = table.getRow(approver.signatureRowIndex);
+  const signatureCell = signatureRow.getCell(approver.signatureCellIndex);
+  const noteRow = table.getRow(approver.noteRowIndex);
+  const noteCell = noteRow.getCell(approver.noteCellIndex);
+
+  clearSignatureImagesFromCell_(signatureCell);
+  clearManagedSignedNotes_(noteCell);
+  replaceDateLineWithSignedNote_(noteCell);
+
+  const imageBlob = Utilities.newBlob(
+    Utilities.base64Decode(imageBase64),
+    'image/png',
+    'signature-' + approver.email + '.png'
+  );
+
+  const insertAt = Math.min(1, signatureCell.getNumChildren());
+  const paragraph = signatureCell.insertParagraph(insertAt, '');
+  paragraph.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  const image = paragraph.appendInlineImage(imageBlob);
+  const originalWidth = image.getWidth();
+  const originalHeight = image.getHeight();
+  const scale = SIGNATURE_IMAGE_WIDTH / originalWidth;
+  image.setWidth(Math.round(originalWidth * scale));
+  image.setHeight(Math.round(originalHeight * scale));
+
+  const timestamp = Utilities.formatDate(
+    new Date(),
+    Session.getScriptTimeZone() || 'America/Mexico_City',
+    "yyyy-MM-dd HH:mm:ss"
+  );
+
+  const detail = noteCell.appendParagraph(
+    SIGNED_NOTE_PREFIX + timestamp + ' via ' + (mode === 'type' ? 'typed signature' : 'drawn signature')
+  );
+  detail.setFontSize(8);
+  detail.setForegroundColor('#5f6368');
+}
+
+function sendNextApproverEmail_(state) {
+  const nextApprover = state.approvers[state.currentStep];
+  if (!nextApprover || !nextApprover.email) {
+    return;
+  }
+
+  const doc = DocumentApp.getActiveDocument();
+  const url = doc.getUrl();
+  const signedApprovers = state.approvers.slice(0, state.currentStep).map(function(approver) {
+    return approver.name;
+  });
+  const currentStepLabel = state.currentStep + 1;
+  const htmlBody = [
+    '<div style="font-family:Arial,sans-serif;background:#f6f8fb;padding:24px;color:#202124;">',
+    '<div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #dadce0;border-radius:18px;overflow:hidden;">',
+    getCompanyBrandHtml_(),
+    '<div style="padding:24px;">',
+    '<p style="margin:0 0 12px;">Hello ' + sanitizeHtml_(nextApprover.name) + ',</p>',
+    '<p style="margin:0 0 12px;">It is now your turn to approve <strong>' + sanitizeHtml_(doc.getName()) + '</strong>.</p>',
+    '<p style="margin:0 0 18px;">Current step: <strong>' + currentStepLabel + ' of ' + state.approvers.length + '</strong></p>',
+    '<div style="margin:0 0 18px;padding:16px;border:1px solid #e3e7ee;border-radius:14px;background:#fafbff;">',
+    '<div style="font-size:12px;color:#5f6368;margin-bottom:8px;">Completed approvals</div>',
+    '<div style="font-size:14px;color:#202124;">' + sanitizeHtml_(signedApprovers.length ? signedApprovers.join(', ') : 'None yet') + '</div>',
+    '</div>',
+    '<p style="margin:0 0 20px;"><a href="' + url + '" style="display:inline-block;padding:12px 20px;background:#1a73e8;color:#ffffff;text-decoration:none;border-radius:999px;font-weight:600;">Open document</a></p>',
+    '<p style="margin:0;color:#5f6368;">When you open the document, the signature sidebar will appear automatically if it is your turn.</p>',
+    '</div>',
+    '</div>',
+    '</div>'
+  ].join('');
+
+  MailApp.sendEmail({
+    to: nextApprover.email,
+    subject: 'Action required: document approval',
+    htmlBody: htmlBody
+  });
+}
+
+function notifyAllApproved_(state, pdfFile) {
+  const doc = DocumentApp.getActiveDocument();
+  const recipients = state.emailList.join(',');
+  const completedBy = state.approvers.map(function(approver) {
+    return approver.name;
+  }).join(', ');
+  const htmlBody = [
+    '<div style="font-family:Arial,sans-serif;background:#f6f8fb;padding:24px;color:#202124;">',
+    '<div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #dadce0;border-radius:18px;overflow:hidden;">',
+    getCompanyBrandHtml_(),
+    '<div style="padding:24px;">',
+    '<p style="margin:0 0 12px;">The document <strong>' + sanitizeHtml_(doc.getName()) + '</strong> is now fully approved.</p>',
+    '<div style="margin:0 0 18px;padding:16px;border:1px solid #e3e7ee;border-radius:14px;background:#fafbff;">',
+    '<div style="font-size:12px;color:#5f6368;margin-bottom:8px;">Approved by</div>',
+    '<div style="font-size:14px;color:#202124;">' + sanitizeHtml_(completedBy) + '</div>',
+    '</div>',
+    '<p style="margin:0 0 12px;"><a href="' + doc.getUrl() + '" style="color:#1a73e8;text-decoration:none;">Open document</a></p>',
+    '<p style="margin:0;"><a href="' + pdfFile.getUrl() + '" style="color:#1a73e8;text-decoration:none;">Open final PDF</a></p>',
+    '</div>',
+    '</div>',
+    '</div>'
+  ].join('');
+
+  MailApp.sendEmail({
+    to: recipients,
+    subject: 'Document fully approved',
+    htmlBody: htmlBody
+  });
+}
+
+function finalizeAndExportApprovedPdf_() {
+  const activeDoc = DocumentApp.getActiveDocument();
+  const documentId = activeDoc.getId();
+
+  activeDoc.saveAndClose();
+
+  // Reopen the document after flushing changes so the exported PDF includes
+  // the last approver's signature.
+  const doc = DocumentApp.openById(documentId);
+  const pdfBlob = doc.getAs(MimeType.PDF)
+    .setName(doc.getName() + ' - Approved.pdf');
+  const folder = getOrCreatePdfFolder_(documentId);
+  return folder.createFile(pdfBlob);
+}
+
+function getOrCreatePdfFolder_(documentId) {
+  const docFile = DriveApp.getFileById(documentId);
+  const parents = docFile.getParents();
+  const parentFolder = parents.hasNext() ? parents.next() : DriveApp.getRootFolder();
+  const existing = parentFolder.getFoldersByName(PDF_FOLDER_NAME);
+  return existing.hasNext() ? existing.next() : parentFolder.createFolder(PDF_FOLDER_NAME);
+}
+
+function getActiveUserEmail_() {
+  return (Session.getActiveUser().getEmail() || '').trim();
+}
+
+function inspectDocumentLinks_() {
+  const body = getDocumentBody_(DocumentApp.getActiveDocument());
+  const links = [];
+  collectMailtoLinksFromElement_(body, links);
+
+  return {
+    tableCount: countTables_(body),
+    mailtoCount: links.length,
+    samples: links.slice(0, 8).map(function(link) {
+      return (link.text || '[sin texto]') + ' <' + link.email + '>';
+    })
+  };
+}
+
+function countTables_(body) {
+  let count = 0;
+  for (let i = 0; i < body.getNumChildren(); i += 1) {
+    if (body.getChild(i).getType() === DocumentApp.ElementType.TABLE) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function getDocumentBody_(doc) {
+  if (typeof doc.getActiveTab === 'function') {
+    return doc.getActiveTab().asDocumentTab().getBody();
+  }
+  return doc.getBody();
+}
+
+function isCellMostlyEmpty_(cell) {
+  const text = normalizeWhitespace_(cell.getText());
+  return !text;
+}
+
+function normalizeWhitespace_(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeEmail_(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function sanitizeHtml_(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function getCompanyBrandHtml_() {
+  return [
+    '<div style="padding:20px 24px;border-bottom:1px solid #eceff3;background:linear-gradient(180deg,#ffffff 0%,#fbfbfc 100%);">',
+    '<div style="font-family:Georgia,Times,serif;font-size:36px;line-height:1;color:#1e1e1e;letter-spacing:-1px;">',
+    '<span>conceiv</span><span style="color:#d79b43;">able</span>',
+    '<span style="display:inline-block;margin-left:8px;font-family:Arial,sans-serif;font-size:11px;line-height:1.1;letter-spacing:.08em;color:#4b4b4b;vertical-align:middle;">LIFE<br>SCIENCES</span>',
+    '</div>',
+    '</div>'
+  ].join('');
+}
+
+function clearAllApprovalMarks_() {
+  const state = getApprovalState_();
+  const doc = DocumentApp.getActiveDocument();
+  const body = getDocumentBody_(doc);
+
+  state.approvers.forEach(function(approver) {
+    if (approver.tableIndex >= body.getNumChildren()) {
+      return;
+    }
+
+    const tableElement = body.getChild(approver.tableIndex);
+    if (tableElement.getType() !== DocumentApp.ElementType.TABLE) {
+      return;
+    }
+
+    const table = tableElement.asTable();
+    if (approver.signatureRowIndex < table.getNumRows()) {
+      const signatureCell = table.getRow(approver.signatureRowIndex).getCell(approver.signatureCellIndex);
+      clearSignatureImagesFromCell_(signatureCell);
+    }
+    if (approver.noteRowIndex < table.getNumRows()) {
+      const noteCell = table.getRow(approver.noteRowIndex).getCell(approver.noteCellIndex);
+      clearManagedSignedNotes_(noteCell);
+      restoreEmptyDateLineIfNeeded_(noteCell);
+    }
+  });
+}
+
+function clearSignatureImagesFromCell_(cell) {
+  for (let i = cell.getNumChildren() - 1; i >= 0; i -= 1) {
+    const child = cell.getChild(i);
+    if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) {
+      continue;
+    }
+
+    const paragraph = child.asParagraph();
+    let removedInlineImage = false;
+    for (let j = paragraph.getNumChildren() - 1; j >= 0; j -= 1) {
+      if (paragraph.getChild(j).getType() === DocumentApp.ElementType.INLINE_IMAGE) {
+        paragraph.removeChild(paragraph.getChild(j));
+        removedInlineImage = true;
+      }
+    }
+
+    if (removedInlineImage && !normalizeWhitespace_(paragraph.getText())) {
+      cell.removeChild(paragraph);
+    }
+  }
+}
+
+function clearManagedSignedNotes_(cell) {
+  for (let i = cell.getNumChildren() - 1; i >= 0; i -= 1) {
+    const child = cell.getChild(i);
+    if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) {
+      continue;
+    }
+
+    const paragraph = child.asParagraph();
+    const text = normalizeWhitespace_(paragraph.getText());
+    if (text.indexOf(SIGNED_NOTE_PREFIX) === 0) {
+      cell.removeChild(paragraph);
+    }
+  }
+}
+
+function replaceDateLineWithSignedNote_(cell) {
+  for (let i = cell.getNumChildren() - 1; i >= 0; i -= 1) {
+    const child = cell.getChild(i);
+    if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) {
+      continue;
+    }
+
+    const paragraph = child.asParagraph();
+    const text = normalizeWhitespace_(paragraph.getText());
+    if (/^date\s*:/i.test(text)) {
+      cell.removeChild(paragraph);
+      return;
+    }
+  }
+}
+
+function restoreEmptyDateLineIfNeeded_(cell) {
+  if (/date\s*:/i.test(cell.getText()) || cell.getText().indexOf(SIGNED_NOTE_PREFIX) !== -1) {
+    return;
+  }
+
+  const paragraph = cell.appendParagraph('Date:');
+  paragraph.setFontSize(10);
+}
