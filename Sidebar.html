@@ -136,6 +136,10 @@
         margin-top: 12px;
       }
 
+      .actions.stacked {
+        flex-direction: column;
+      }
+
       .btn {
         border: 1px solid var(--border);
         border-radius: 999px;
@@ -156,6 +160,15 @@
         background: var(--primary-hover);
       }
 
+      .btn.danger {
+        border-color: #d93025;
+        color: #d93025;
+      }
+
+      .btn.danger:hover {
+        background: #fce8e6;
+      }
+
       .btn:disabled {
         cursor: not-allowed;
         opacity: 0.55;
@@ -169,6 +182,16 @@
 
       .input {
         width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 12px 14px;
+        font: inherit;
+      }
+
+      .textarea {
+        width: 100%;
+        min-height: 74px;
+        resize: vertical;
         border: 1px solid var(--border);
         border-radius: 12px;
         padding: 12px 14px;
@@ -253,8 +276,14 @@
             <div class="hint" style="margin-top:10px;">The preview uses Dancing Script to simulate a handwritten signature.</div>
           </div>
 
-          <div class="actions" style="margin-top:16px;">
+          <div class="field" style="margin-top:16px;">
+            <label class="label" for="rejectionReason">Rejection note (optional)</label>
+            <textarea class="textarea" id="rejectionReason" placeholder="Add context for rework or point reviewers to the ORL."></textarea>
+          </div>
+
+          <div class="actions stacked" style="margin-top:16px;">
             <button class="btn primary" id="confirmBtn" type="button">Confirm signature</button>
+            <button class="btn danger" id="rejectBtn" type="button">Reject document</button>
           </div>
         </div>
       </div>
@@ -281,6 +310,8 @@
       const typedInput = document.getElementById('typedSignature');
       const typedPreview = document.getElementById('typedPreview');
       const confirmBtn = document.getElementById('confirmBtn');
+      const rejectBtn = document.getElementById('rejectBtn');
+      const rejectionReason = document.getElementById('rejectionReason');
       const clearCanvasBtn = document.getElementById('clearCanvasBtn');
 
       init();
@@ -393,8 +424,7 @@
       }
 
       confirmBtn.addEventListener('click', async () => {
-        confirmBtn.disabled = true;
-        confirmBtn.textContent = 'Saving...';
+        setBusyState(true, 'Saving...', 'Reject document');
 
         try {
           await document.fonts.ready;
@@ -405,8 +435,27 @@
         } catch (error) {
           alert(error.message || error);
         } finally {
-          confirmBtn.disabled = false;
-          confirmBtn.textContent = 'Confirm signature';
+          setBusyState(false, 'Confirm signature', 'Reject document');
+        }
+      });
+
+      rejectBtn.addEventListener('click', async () => {
+        const proceed = window.confirm('Reject this document, clear all recorded approval signatures, and send it back to the first approver?');
+        if (!proceed) {
+          return;
+        }
+
+        setBusyState(true, 'Confirm signature', 'Rejecting...');
+        try {
+          const result = await runServer('rejectDocument', {
+            reason: rejectionReason.value.trim()
+          });
+          alert(result.message);
+          google.script.host.close();
+        } catch (error) {
+          alert(error.message || error);
+        } finally {
+          setBusyState(false, 'Confirm signature', 'Reject document');
         }
       });
 
@@ -473,6 +522,16 @@
             .withSuccessHandler(resolve)
             .withFailureHandler(reject)[method](payload);
         });
+      }
+
+      function setBusyState(disabled, confirmLabel, rejectLabel) {
+        confirmBtn.disabled = disabled;
+        rejectBtn.disabled = disabled;
+        typedInput.disabled = disabled;
+        rejectionReason.disabled = disabled;
+        clearCanvasBtn.disabled = disabled;
+        confirmBtn.textContent = confirmLabel;
+        rejectBtn.textContent = rejectLabel;
       }
     </script>
   </body>
