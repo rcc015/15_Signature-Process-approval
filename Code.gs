@@ -452,6 +452,7 @@ function sendNextApproverEmail_(state) {
   }
 
   const doc = DocumentApp.getActiveDocument();
+  const docName = doc.getName();
   const url = doc.getUrl();
   const signedApprovers = state.approvers.slice(0, state.currentStep).map(function(approver) {
     return approver.name;
@@ -478,7 +479,7 @@ function sendNextApproverEmail_(state) {
 
   MailApp.sendEmail({
     to: nextApprover.email,
-    subject: 'Action required: document approval',
+    subject: 'Action required: document approval - ' + docName,
     htmlBody: htmlBody
   });
 }
@@ -490,6 +491,7 @@ function sendRejectionEmail_(state, rejectingApprover, reviewListFile, reason) {
   }
 
   const doc = DocumentApp.getActiveDocument();
+  const docName = doc.getName();
   const reasonHtml = reason
     ? '<div style="margin:0 0 18px;padding:16px;border:1px solid #f1d7b4;border-radius:14px;background:#fff8ef;"><div style="font-size:12px;color:#8b5e1a;margin-bottom:8px;">Rejection note</div><div style="font-size:14px;color:#202124;">' + sanitizeHtml_(reason) + '</div></div>'
     : '';
@@ -515,13 +517,14 @@ function sendRejectionEmail_(state, rejectingApprover, reviewListFile, reason) {
 
   MailApp.sendEmail({
     to: firstApprover.email,
-    subject: 'Document returned for rework',
+    subject: 'Document returned for rework - ' + docName,
     htmlBody: htmlBody
   });
 }
 
 function notifyAllApproved_(state, pdfFile) {
   const doc = DocumentApp.getActiveDocument();
+  const docName = doc.getName();
   const recipients = state.emailList.join(',');
   const completedBy = state.approvers.map(function(approver) {
     return approver.name;
@@ -545,7 +548,7 @@ function notifyAllApproved_(state, pdfFile) {
 
   MailApp.sendEmail({
     to: recipients,
-    subject: 'Document fully approved',
+    subject: 'Document fully approved - ' + docName,
     htmlBody: htmlBody
   });
 }
