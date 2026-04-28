@@ -187,6 +187,9 @@ function confirmSignature(payload) {
 
 function rejectDocument(payload) {
   const state = getApprovalState_();
+  if (!state.initialized) {
+    throw new Error('The workflow is not initialized for this document. Run Approvals > Initialize Workflow and try again.');
+  }
   const approver = state.approvers[state.currentStep];
   if (!approver) {
     throw new Error('There is no active approver to reject this document.');
@@ -233,13 +236,14 @@ function getApprovalContext_() {
   const activeEmail = getActiveUserEmail_();
   const currentApprover = state.approvers[state.currentStep] || null;
   const canSign = Boolean(
+    state.initialized &&
     currentApprover &&
     activeEmail &&
     normalizeEmail_(activeEmail) === normalizeEmail_(currentApprover.email)
   );
 
   return {
-    initialized: state.approvers.length > 0,
+    initialized: Boolean(state.initialized),
     currentStep: state.currentStep,
     totalSteps: state.approvers.length,
     activeUserEmail: activeEmail,
@@ -261,7 +265,8 @@ function getApprovalState_() {
       emailList: JSON.parse(props.getProperty(EMAIL_LIST_KEY) || '[]'),
       documentId: props.getProperty(DOCUMENT_ID_KEY) || DocumentApp.getActiveDocument().getId(),
       updatedAt: props.getProperty(UPDATED_AT_KEY) || '',
-      lastSignedBy: props.getProperty(LAST_SIGNED_BY_KEY) || ''
+      lastSignedBy: props.getProperty(LAST_SIGNED_BY_KEY) || '',
+      initialized: true
     };
     if (!state.emailList.length) {
       state.emailList = approvers.map(function(approver) {
