@@ -9,23 +9,40 @@ const PDF_FOLDER_NAME = 'Approved PDFs';
 const SIGNED_NOTE_PREFIX = 'Signed on ';
 const ORL_STATUS_OPEN = 'Open';
 
-function onOpen() {
-  const ui = DocumentApp.getUi();
-  ui.createMenu('Approvals')
-    .addItem('Open Signature Panel', 'showSignatureSidebar')
-    .addItem('Initialize Workflow', 'initializeApprovalFlow')
-    .addItem('Diagnose Links', 'debugApprovalLinks')
-    .addItem('Reset Workflow', 'resetApprovalFlow')
-    .addToUi();
+function onOpen(e) {
+  const menu = DocumentApp.getUi().createAddonMenu();
+  menu.addItem('Open Signature Panel', 'showSignatureSidebar');
+  menu.addItem('Initialize Workflow', 'initializeApprovalFlow');
+  menu.addItem('Diagnose Links', 'debugApprovalLinks');
+  menu.addItem('Reset Workflow', 'resetApprovalFlow');
+  menu.addToUi();
+}
 
-  try {
-    const context = getApprovalContext_();
-    if (context.canSign) {
-      showSignatureSidebar();
-    }
-  } catch (error) {
-    console.error('onOpen error:', error);
-  }
+function onInstall(e) {
+  onOpen(e);
+}
+
+function buildDocsHomepageCard() {
+  const section = CardService.newCardSection()
+    .addWidget(
+      CardService.newTextParagraph()
+        .setText(
+          'Use this add-on from the <b>Extensions</b> menu inside Google Docs.' +
+          '<br><br>Recommended flow:' +
+          '<br>1. Initialize Workflow' +
+          '<br>2. Open Signature Panel' +
+          '<br>3. Sign or reject as the current approver'
+        )
+    );
+
+  return CardService.newCardBuilder()
+    .setHeader(
+      CardService.newCardHeader()
+        .setTitle('Approval Signature')
+        .setSubtitle('Sequential document approval for Google Docs')
+    )
+    .addSection(section)
+    .build();
 }
 
 function showSignatureSidebar() {
@@ -75,6 +92,9 @@ function confirmSignature(payload) {
   }
 
   const state = getApprovalState_();
+  if (!state.initialized) {
+    throw new Error('The workflow is not initialized for this document. Run Approvals > Initialize Workflow and try again.');
+  }
   const approver = state.approvers[state.currentStep];
   if (!approver) {
     throw new Error('The workflow is already complete or has not been initialized.');
@@ -93,24 +113,72 @@ function confirmSignature(payload) {
     throw new Error('The saved workflow state belongs to another document.');
   }
 
-  insertSignatureIntoTable_(payload.imageBase64, approver, payload.mode);
+  try {
+    insertSignatureIntoTable_(payload.imageBase64, approver, payload.mode);
+  } catch (error) {
+    throw buildDetailedError_(
+      'The signature could not be inserted into the approval table.',
+      error
+    );
+  }
 
   state.currentStep += 1;
   state.updatedAt = new Date().toISOString();
   state.lastSignedBy = approver.email;
 
   if (state.currentStep < state.approvers.length) {
-    saveApprovalState_(state);
-    sendNextApproverEmail_(state);
+    try {
+      saveApprovalState_(state);
+    } catch (error) {
+      throw buildDetailedError_(
+        'The document workflow state could not be updated after signing.',
+        error
+      );
+    }
+
+    try {
+      sendNextApproverEmail_(state);
+    } catch (error) {
+      throw buildDetailedError_(
+        'The signature was recorded, but the next approver email could not be sent.',
+        error
+      );
+    }
+
     return {
       done: false,
       message: 'Signature recorded. ' + state.approvers[state.currentStep].name + ' has been notified.'
     };
   }
 
-  saveApprovalState_(state);
-  const pdfFile = finalizeAndExportApprovedPdf_();
-  notifyAllApproved_(state, pdfFile);
+  try {
+    saveApprovalState_(state);
+  } catch (error) {
+    throw buildDetailedError_(
+      'The final approval state could not be saved.',
+      error
+    );
+  }
+
+  let pdfFile;
+  try {
+    pdfFile = finalizeAndExportApprovedPdf_();
+  } catch (error) {
+    throw buildDetailedError_(
+      'The document was signed, but the final approved PDF could not be created.',
+      error
+    );
+  }
+
+  try {
+    notifyAllApproved_(state, pdfFile);
+  } catch (error) {
+    throw buildDetailedError_(
+      'The document was fully approved, but the completion email could not be sent.',
+      error
+    );
+  }
+
   return {
     done: true,
     message: 'Signature recorded. The document is now fully approved.'
@@ -204,7 +272,7 @@ function getApprovalState_() {
   }
 
   const state = buildApprovalState_();
-  saveApprovalState_(state);
+  state.initialized = false;
   return state;
 }
 
@@ -220,7 +288,8 @@ function buildApprovalState_() {
       return approver.email;
     }),
     documentId: doc.getId(),
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    initialized: true
   };
 }
 
@@ -234,6 +303,11 @@ function saveApprovalState_(state) {
   if (state.lastSignedBy) {
     props.setProperty(LAST_SIGNED_BY_KEY, state.lastSignedBy);
   }
+}
+
+function buildDetailedError_(prefix, error) {
+  const detail = error && error.message ? String(error.message) : String(error || 'Unknown error');
+  return new Error(prefix + ' Details: ' + detail);
 }
 
 function extractApproversFromTables_(body) {
