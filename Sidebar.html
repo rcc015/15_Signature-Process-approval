@@ -58,7 +58,8 @@
       .subtitle,
       .meta,
       .hint,
-      .status {
+      .status,
+      .build {
         color: var(--muted);
       }
 
@@ -66,6 +67,7 @@
       .meta,
       .hint,
       .status,
+      .build,
       .label {
         font-size: 12px;
       }
@@ -237,8 +239,9 @@
       <div class="card">
         <div class="header">
           <div class="pill">Sequential workflow</div>
-          <h1 class="title">Approval signature</h1>
+          <h1 class="title">Approval Signature</h1>
           <div class="subtitle" id="docName"></div>
+          <div class="build" id="buildStamp"></div>
         </div>
         <div class="content">
           <div class="state" id="stateBox">
@@ -326,6 +329,7 @@
 
       function renderContext(context) {
         document.getElementById('docName').textContent = context.documentName || '';
+        document.getElementById('buildStamp').textContent = 'Build: 2026-04-28 11:23 CST';
 
         const current = context.currentApprover;
         const stateMeta = context.initialized

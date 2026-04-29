@@ -13,7 +13,6 @@ function onOpen(e) {
   const menu = DocumentApp.getUi().createAddonMenu();
   menu.addItem('Open Signature Panel', 'showSignatureSidebar');
   menu.addItem('Initialize Workflow', 'initializeApprovalFlow');
-  menu.addItem('Diagnose Links', 'debugApprovalLinks');
   menu.addItem('Reset Workflow', 'resetApprovalFlow');
   menu.addToUi();
 }
@@ -501,7 +500,7 @@ function insertSignatureIntoTable_(imageBase64, approver, mode) {
     'signature-' + approver.email + '.png'
   );
 
-  const insertAt = Math.min(1, signatureCell.getNumChildren());
+  const insertAt = 0;
   const paragraph = signatureCell.insertParagraph(insertAt, '');
   paragraph.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
   const image = paragraph.appendInlineImage(imageBlob);
